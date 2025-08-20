@@ -50,10 +50,21 @@ type PageRow = {
   averageSessionDuration?: number;
   totalUsers?: number;
   diagnosis?: string;
-  // 予防的に動的キーも許可
   [k: string]: string | number | undefined;
 };
 type DiagnoseJson = { pages?: PageRow[] };
+
+/* 参照元（流入） */
+type TrafficDim = 'sourcemedium' | 'channel' | 'referrer';
+type TrafficRow = {
+  label: string;
+  sessions: number;
+  totalUsers: number;
+  engagementRate: number;     // %
+  bounceRate: number;         // %
+  averageSessionDuration: number;
+};
+type TrafficJson = { rows?: TrafficRow[] };
 
 /* ---------- Component ---------- */
 export default function ViewerPage() {
@@ -63,6 +74,11 @@ export default function ViewerPage() {
   const [endDate, setEndDate] = useState<string>('');
   const [rows, setRows] = useState<PageRow[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
+
+  // 参照元（流入）
+  const [traffic, setTraffic] = useState<TrafficRow[]>([]);
+  const [trafficDim, setTrafficDim] = useState<TrafficDim>('sourcemedium');
+  const [tLoading, setTLoading] = useState<boolean>(false);
 
   // 初回：URLパラメータを読み込む
   useEffect(() => {
@@ -95,28 +111,19 @@ export default function ViewerPage() {
     }
     setLoading(true);
     try {
-      const base =
-        typeof window !== 'undefined' ? window.location.origin : '';
+      const base = window.location.origin;
       const res = await fetch(`${base}/api/diagnose`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
         },
-        body: JSON.stringify({
-          propertyId,
-          startDate,
-          endDate,
-          limit: 200,
-        }),
+        body: JSON.stringify({ propertyId, startDate, endDate, limit: 200 }),
       });
       const json = (await res.json()) as DiagnoseJson;
-      if (!res.ok) {
-        throw new Error(JSON.stringify(json));
-      }
+      if (!res.ok) throw new Error(JSON.stringify(json));
       setRows(Array.isArray(json.pages) ? json.pages : []);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error(e);
       alert('取得に失敗しました。コンソールを確認してください。');
     } finally {
@@ -126,15 +133,12 @@ export default function ViewerPage() {
 
   async function downloadCsv() {
     if (!apiKey || !propertyId) return;
-    const base = typeof window !== 'undefined' ? window.location.origin : '';
+    const base = window.location.origin;
     const u = new URL(`${base}/api/diagnose`);
     u.searchParams.set('format', 'csv');
     const res = await fetch(u, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-      },
+      headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
       body: JSON.stringify({ propertyId, startDate, endDate, limit: 200 }),
     });
     const blob = await res.blob();
@@ -144,6 +148,31 @@ export default function ViewerPage() {
     a.download = `ga4-${propertyId}-${startDate}_${endDate}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function fetchTraffic(dim: TrafficDim) {
+    if (!apiKey || !propertyId) {
+      alert('API Key と Property ID を入力してください');
+      return;
+    }
+    setTLoading(true);
+    try {
+      const base = window.location.origin;
+      const res = await fetch(`${base}/api/traffic`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+        body: JSON.stringify({ propertyId, startDate, endDate, limit: 50, dim }),
+      });
+      const json = (await res.json()) as TrafficJson;
+      if (!res.ok) throw new Error(JSON.stringify(json));
+      setTraffic(Array.isArray(json.rows) ? json.rows : []);
+      setTrafficDim(dim);
+    } catch (e) {
+      console.error(e);
+      alert('参照元の取得に失敗しました');
+    } finally {
+      setTLoading(false);
+    }
   }
 
   /* ---------- UI ---------- */
@@ -205,31 +234,13 @@ export default function ViewerPage() {
         </label>
 
         <div style={{ display: 'flex', gap: 6 }}>
-          <button
-            onClick={() => {
-              const r = rangeFromPreset('last7');
-              setStartDate(r.start);
-              setEndDate(r.end);
-            }}
-          >
+          <button onClick={() => { const r = rangeFromPreset('last7'); setStartDate(r.start); setEndDate(r.end); }}>
             直近7日
           </button>
-          <button
-            onClick={() => {
-              const r = rangeFromPreset('lastmonth');
-              setStartDate(r.start);
-              setEndDate(r.end);
-            }}
-          >
+          <button onClick={() => { const r = rangeFromPreset('lastmonth'); setStartDate(r.start); setEndDate(r.end); }}>
             先月
           </button>
-          <button
-            onClick={() => {
-              const r = rangeFromPreset('yesterday');
-              setStartDate(r.start);
-              setEndDate(r.end);
-            }}
-          >
+          <button onClick={() => { const r = rangeFromPreset('yesterday'); setStartDate(r.start); setEndDate(r.end); }}>
             昨日
           </button>
         </div>
@@ -249,10 +260,10 @@ export default function ViewerPage() {
         </button>
       </div>
 
+      {/* ページ別の診断表 */}
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
-         <tr style={{ background: '#f3f4f6', color: '#111' }}>
-
+          <tr style={{ background: '#f3f4f6', color: '#111' }}>
             <th style={{ border: '1px solid #e5e7eb', padding: 8, textAlign: 'left' }}>Page</th>
             <th style={{ border: '1px solid #e5e7eb', padding: 8 }}>PV</th>
             <th style={{ border: '1px solid #e5e7eb', padding: 8 }}>直帰率</th>
@@ -287,6 +298,58 @@ export default function ViewerPage() {
           })}
         </tbody>
       </table>
+
+      {/* 参照元（流入）セクション */}
+      <section style={{ marginTop: 24 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>参照元（流入）</h2>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+          <button onClick={() => fetchTraffic('sourcemedium')} disabled={tLoading}>
+            Source / Medium
+          </button>
+          <button onClick={() => fetchTraffic('channel')} disabled={tLoading}>
+            チャネル（デフォルト）
+          </button>
+          <button onClick={() => fetchTraffic('referrer')} disabled={tLoading}>
+            参照元URL
+          </button>
+        </div>
+
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: '#f3f4f6', color: '#111' }}>
+              <th style={{ border: '1px solid #e5e7eb', padding: 8, textAlign: 'left' }}>
+                {trafficDim === 'channel' ? 'Channel'
+                  : trafficDim === 'referrer' ? 'Referrer'
+                  : 'Source / Medium'}
+              </th>
+              <th style={{ border: '1px solid #e5e7eb', padding: 8 }}>Sessions</th>
+              <th style={{ border: '1px solid #e5e7eb', padding: 8 }}>Users</th>
+              <th style={{ border: '1px solid #e5e7eb', padding: 8 }}>ER</th>
+              <th style={{ border: '1px solid #e5e7eb', padding: 8 }}>直帰率</th>
+              <th style={{ border: '1px solid #e5e7eb', padding: 8 }}>平均秒</th>
+            </tr>
+          </thead>
+          <tbody>
+            {traffic.map((r, i) => (
+              <tr key={`${r.label}-${i}`}>
+                <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{r.label || '(not set)'}</td>
+                <td style={{ border: '1px solid #e5e7eb', padding: 8, textAlign: 'right' }}>{fmtInt(r.sessions)}</td>
+                <td style={{ border: '1px solid #e5e7eb', padding: 8, textAlign: 'right' }}>{fmtInt(r.totalUsers)}</td>
+                <td style={{ border: '1px solid #e5e7eb', padding: 8, textAlign: 'right' }}>{fmtPct(r.engagementRate)}</td>
+                <td style={{ border: '1px solid #e5e7eb', padding: 8, textAlign: 'right' }}>{fmtPct(r.bounceRate)}</td>
+                <td style={{ border: '1px solid #e5e7eb', padding: 8, textAlign: 'right' }}>{fmtSec(r.averageSessionDuration)}</td>
+              </tr>
+            ))}
+            {traffic.length === 0 && (
+              <tr>
+                <td colSpan={6} style={{ border: '1px solid #e5e7eb', padding: 8, color: '#6b7280' }}>
+                  上のボタンを押すと参照元一覧を取得します
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </section>
     </main>
   );
 }
