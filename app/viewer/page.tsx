@@ -251,7 +251,8 @@ export default function ViewerPage() {
 
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
         <thead>
-          <tr style={{ background: '#f3f4f6' }}>
+         <tr style={{ background: '#f3f4f6', color: '#111' }}>
+
             <th style={{ border: '1px solid #e5e7eb', padding: 8, textAlign: 'left' }}>Page</th>
             <th style={{ border: '1px solid #e5e7eb', padding: 8 }}>PV</th>
             <th style={{ border: '1px solid #e5e7eb', padding: 8 }}>直帰率</th>
