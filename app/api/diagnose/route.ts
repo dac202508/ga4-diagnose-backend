@@ -15,9 +15,7 @@ const json = (data: unknown, status = 200) =>
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8', ...CORS },
   });
-export function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS });
-}
+export function OPTIONS() { return new NextResponse(null, { status: 204, headers: CORS }); }
 
 /* ===== utils ===== */
 type ClientsMap = Record<string, string[]>;
@@ -37,7 +35,11 @@ const median = (nums: number[]): number => {
 const isStr = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
-/* ===== GET: debug（/api/diagnose で env を確認） ===== */
+/* ===== 型 ===== */
+type Row = Record<string, string | number>;
+type PageRow = Row & { diagnosis: string };
+
+/* ===== GET: /api/diagnose（デバッグ：ENV確認） ===== */
 export function GET(req: NextRequest) {
   return json({
     ok: true,
@@ -55,7 +57,7 @@ type BodyIn = { propertyId?: string; startDate?: string; endDate?: string; limit
 
 export async function POST(req: NextRequest) {
   try {
-    // 認証・認可（CLIENTS_JSON を優先、なければ API_KEY）
+    /* --- 認証・認可（CLIENTS_JSON 優先、無ければ API_KEY） --- */
     const headerKey = (req.headers.get('x-api-key') ?? '').trim();
     const clients = parseClients();
     const legacyKey = (process.env.API_KEY ?? '').trim();
@@ -68,10 +70,9 @@ export async function POST(req: NextRequest) {
       if (headerKey !== legacyKey) return json({ error: 'Unauthorized' }, 401);
     }
 
-    // 入力（constで固定）
+    /* --- 入力（const固定） --- */
     const format = (req.nextUrl.searchParams.get('format') ?? '').toLowerCase(); // 'csv' でCSV返却
-    const bodyUnknown = await req.json().catch(() => ({}));
-    const body = bodyUnknown as BodyIn;
+    const body = (await req.json().catch(() => ({}))) as BodyIn;
 
     const propertyId = isStr(body.propertyId) ? body.propertyId : '';
     if (!propertyId) return json({ error: 'propertyId is required' }, 400);
@@ -84,7 +85,7 @@ export async function POST(req: NextRequest) {
       return json({ error: 'Forbidden propertyId for this key', allowed }, 403);
     }
 
-    // GA4 クライアント
+    /* --- GA4 クライアント --- */
     const clientEmail = process.env.GA4_CLIENT_EMAIL ?? '';
     const privateKey  = normalizePK(process.env.GA4_PRIVATE_KEY);
     if (!clientEmail || !privateKey) return json({ error: 'Missing GA4 service account envs' }, 500);
@@ -92,7 +93,7 @@ export async function POST(req: NextRequest) {
     const ga = new BetaAnalyticsDataClient({ credentials: { client_email: clientEmail, private_key: privateKey } });
     const propertyName = `properties/${propertyId}`;
 
-    // メタデータ
+    /* --- メタデータ --- */
     const [meta] = await ga.getMetadata({ name: `${propertyName}/metadata` });
     const dims = new Set((meta.dimensions ?? []).map((d) => d.apiName));
     const mets = new Set((meta.metrics ?? []).map((m) => m.apiName));
@@ -103,7 +104,7 @@ export async function POST(req: NextRequest) {
 
     const metrics = [chosenView, ...chosenExtra].map((name) => ({ name }));
 
-    // レポート
+    /* --- レポート --- */
     const [res] = await ga.runReport({
       property: propertyName,
       dateRanges: [{ startDate, endDate }],
@@ -113,8 +114,7 @@ export async function POST(req: NextRequest) {
       orderBys: [{ metric: { metricName: chosenView }, desc: true }],
     });
 
-    // 整形
-    type Row = Record<string, string | number>;
+    /* --- 整形 --- */
     const chosenDimName: string = chosenDim;
     const chosenViewName: string = chosenView;
 
@@ -122,8 +122,8 @@ export async function POST(req: NextRequest) {
       const rec: Row = { [chosenDimName]: r.dimensionValues?.[0]?.value ?? '' };
       metrics.forEach((m, i) => {
         const name = m.name;
-        const rawVal = Number(r.metricValues?.[i]?.value ?? '0');
-        const val = name === 'bounceRate' || name === 'engagementRate' ? rawVal * 100 : rawVal;
+        const raw = Number(r.metricValues?.[i]?.value ?? '0');
+        const val = name === 'bounceRate' || name === 'engagementRate' ? raw * 100 : raw;
         rec[name] = val;
       });
       return rec;
@@ -136,16 +136,15 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 中央値
+    /* --- 中央値 --- */
     const medians: Record<string, number> = {};
-    const metricNames: string[] = [chosenViewName, ...chosenExtra];
-    for (const name of metricNames) {
+    for (const name of [chosenViewName, ...chosenExtra]) {
       const vals = rows.map((r) => Number(r[name] ?? 0)).filter(Number.isFinite);
       if (vals.length) medians[name] = median(vals);
     }
 
-    // 診断
-    const pages = rows.map((r) => {
+    /* --- 診断（PageRow[] を明示） --- */
+    const pages: PageRow[] = rows.map((r): PageRow => {
       const notes: string[] = [];
       const br = Number(r['bounceRate'] ?? NaN);
       const er = Number(r['engagementRate'] ?? NaN);
@@ -162,10 +161,11 @@ export async function POST(req: NextRequest) {
         notes.push('閲覧数が少ない（露出不足）');
       }
       if (notes.length === 0) notes.push('標準的');
-      return { ...r, diagnosis: notes.join(' / ') };
+
+      return { ...(r as Row), diagnosis: notes.join(' / ') };
     });
 
-    // CSV
+    /* --- CSV（?format=csv）--- */
     if (format === 'csv') {
       const headers = [
         chosenDimName,
@@ -176,12 +176,21 @@ export async function POST(req: NextRequest) {
         const s = String(v ?? '');
         return s.includes(',') || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s;
       };
-      const lines = pages.map((r) => [
-        r[chosenDimName] ?? '',
-        r['views'] ?? '', r['screenPageViews'] ?? '', r['eventCount'] ?? '', r['sessions'] ?? '',
-        r['bounceRate'] ?? '', r['engagementRate'] ?? '', r['averageSessionDuration'] ?? '', r['totalUsers'] ?? '',
-        r['diagnosis'] ?? '',
-      ].map(toCell).join(','));
+
+      // 動的キーを型安全に読むための indexable 型
+      type Indexable = Record<string, string | number> & { diagnosis: string };
+      const idxPages: Indexable[] = pages as unknown as Indexable[];
+
+      const lines = idxPages.map((r) => {
+        const dimVal = (r as Record<string, string | number>)[chosenDimName] ?? '';
+        return [
+          dimVal,
+          r['views'] ?? '', r['screenPageViews'] ?? '', r['eventCount'] ?? '', r['sessions'] ?? '',
+          r['bounceRate'] ?? '', r['engagementRate'] ?? '', r['averageSessionDuration'] ?? '', r['totalUsers'] ?? '',
+          r['diagnosis'] ?? '',
+        ].map(toCell).join(',');
+      });
+
       const csv = [headers.join(','), ...lines].join('\n');
       return new NextResponse(csv, {
         status: 200,
@@ -193,7 +202,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // JSON
+    /* --- JSON --- */
     return json({ meta: { chosenDim, chosenView, chosenExtra, propertyId, startDate, endDate }, medians, pages });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
