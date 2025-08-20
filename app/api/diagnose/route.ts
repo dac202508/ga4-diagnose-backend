@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+
 // app/api/diagnose/route.ts
 export const runtime = 'nodejs'; // gRPC を使うので Edge ではなく Node 実行
 
