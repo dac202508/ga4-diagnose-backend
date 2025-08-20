@@ -1,18 +1,24 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest) {
+type ClientsMap = Record<string, string[]>;
+
+export function GET() {
+  const raw = process.env.CLIENTS_JSON ?? '';
+
+  let parsed: ClientsMap = {};
   try {
-    const raw = process.env.CLIENTS_JSON || '';
-    const parsed = raw ? JSON.parse(raw) : {};
-    const summary = Object.fromEntries(
-      Object.entries(parsed as Record<string, string[]>).map(([k, arr]) => [
-        k, (arr || []).map(v => ({ value: String(v), type: typeof v }))
-      ])
-    );
-    return NextResponse.json({ ok: true, rawLength: raw.length, clients: summary });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e.message, raw: process.env.CLIENTS_JSON }, { status: 500 });
+    parsed = raw ? (JSON.parse(raw) as unknown as ClientsMap) : {};
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'JSON parse error';
+    return NextResponse.json({ ok: false, error: message, raw }, { status: 500 });
   }
+
+  return NextResponse.json({
+    ok: true,
+    rawLength: raw.length,
+    clients: parsed,
+  });
 }
