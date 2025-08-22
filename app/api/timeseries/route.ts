@@ -15,6 +15,7 @@ const j = (data: unknown, status = 200) =>
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8', ...CORS },
   });
+
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS });
 }
@@ -24,12 +25,16 @@ type ClientsMap = Record<string, string[]>;
 const parseClients = (): ClientsMap => {
   const raw = process.env.CLIENTS_JSON ?? '';
   if (!raw) return {};
-  try { return JSON.parse(raw) as ClientsMap; } catch { return {}; }
+  try {
+    return JSON.parse(raw) as ClientsMap;
+  } catch {
+    return {};
+  }
 };
 const normalizePK = (raw?: string): string =>
   !raw ? '' : raw.includes('\\n') ? raw.replace(/\\n/g, '\n') : raw.replace(/\r/g, '');
 
-/* デバッグ用 GET */
+/* ===== デバッグ用 GET ===== */
 export function GET(req: NextRequest) {
   return j({
     ok: true,
@@ -59,7 +64,7 @@ type RowOut = {
 
 export async function POST(req: NextRequest) {
   try {
-    /* 認証（CLIENTS_JSON 優先、無ければ API_KEY） */
+    /* --- 認証（CLIENTS_JSON 優先、無ければ API_KEY） --- */
     const headerKey = (req.headers.get('x-api-key') ?? '').trim();
     const clients = parseClients();
     const legacyKey = (process.env.API_KEY ?? '').trim();
@@ -72,7 +77,7 @@ export async function POST(req: NextRequest) {
       if (headerKey !== legacyKey) return j({ error: 'Unauthorized' }, 401);
     }
 
-    /* 入力 */
+    /* --- 入力 --- */
     const b = (await req.json().catch(() => ({}))) as BodyIn;
     const propertyId = typeof b.propertyId === 'string' ? b.propertyId : '';
     if (!propertyId) return j({ error: 'propertyId is required' }, 400);
@@ -85,7 +90,7 @@ export async function POST(req: NextRequest) {
     const limit     = typeof b.limit     === 'number' ? b.limit : 366;
     const pagePathContains = typeof b.pagePathContains === 'string' ? b.pagePathContains.trim() : '';
 
-    /* GA4 クライアント */
+    /* --- GA4 クライアント --- */
     const clientEmail = process.env.GA4_CLIENT_EMAIL ?? '';
     const privateKey  = normalizePK(process.env.GA4_PRIVATE_KEY);
     if (!clientEmail || !privateKey) return j({ error: 'Missing GA4 service account envs' }, 500);
@@ -95,7 +100,7 @@ export async function POST(req: NextRequest) {
     });
     const propertyName = `properties/${propertyId}`;
 
-    /* リクエスト（正式型で記述） */
+    /* --- リクエスト（protos の正式型で記述） --- */
     const metrics: protos.google.analytics.data.v1beta.IMetric[] = [
       { name: 'sessions' },
       { name: 'screenPageViews' },
@@ -106,6 +111,22 @@ export async function POST(req: NextRequest) {
     ];
     const dimensions: protos.google.analytics.data.v1beta.IDimension[] = [{ name: 'date' }];
 
+    const dimensionFilter:
+      | protos.google.analytics.data.v1beta.IFilterExpression
+      | undefined = pagePathContains
+      ? {
+          filter: {
+            fieldName: 'pagePath',
+            stringFilter: {
+              matchType:
+                protos.google.analytics.data.v1beta.Filter.StringFilter.MatchType.CONTAINS,
+              value: pagePathContains,
+              caseSensitive: false,
+            },
+          },
+        }
+      : undefined;
+
     const reqObj: protos.google.analytics.data.v1beta.IRunReportRequest = {
       property: propertyName,
       dateRanges: [{ startDate, endDate }],
@@ -113,23 +134,14 @@ export async function POST(req: NextRequest) {
       metrics,
       limit,
       orderBys: [{ dimension: { dimensionName: 'date' } }],
-      ...(pagePathContains
-        ? {
-            dimensionFilter: {
-              filter: {
-                fieldName: 'pagePath',
-                stringFilter: { matchType: 'PARTIAL', value: pagePathContains },
-              },
-            },
-          }
-        : {}),
+      ...(dimensionFilter ? { dimensionFilter } : {}),
     };
 
-    /* 実行（await → 0番要素を安全に取得） */
+    /* --- 実行（await → 0番要素を取得） --- */
     const runResp = await ga.runReport(reqObj);
     const res = runResp[0]; // IRunReportResponse
 
-    /* 整形 */
+    /* --- 整形 --- */
     const rows: RowOut[] = (res.rows ?? []).map((r) => {
       const d = r.dimensionValues?.[0]?.value ?? '';
       const date =
