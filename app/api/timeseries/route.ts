@@ -1,5 +1,3 @@
-mkdir -p app/api/timeseries
-cat > app/api/timeseries/route.ts <<'TS'
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -136,4 +134,3 @@ export async function POST(req: NextRequest) {
     return json({ error: msg }, 500);
   }
 }
-TS
