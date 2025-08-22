@@ -1,6 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import {
+  ResponsiveContainer, BarChart, Bar, LineChart, Line, ScatterChart, Scatter,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ZAxis,
+} from 'recharts';
 
 /* ---------- helpers ---------- */
 function rangeFromPreset(preset: string | null) {
@@ -66,6 +70,18 @@ type TrafficRow = {
 };
 type TrafficJson = { rows?: TrafficRow[] };
 
+/* 日別トレンド */
+type SeriesRow = {
+  date: string;
+  sessions: number;
+  pageViews: number;
+  users: number;
+  avgSessionSec: number;
+  erPercent: number;
+  brPercent: number;
+};
+type TimeseriesJson = { rows?: SeriesRow[] };
+
 /* ---------- Component ---------- */
 export default function ViewerPage() {
   const [apiKey, setApiKey] = useState<string>('');
@@ -79,6 +95,11 @@ export default function ViewerPage() {
   const [traffic, setTraffic] = useState<TrafficRow[]>([]);
   const [trafficDim, setTrafficDim] = useState<TrafficDim>('sourcemedium');
   const [tLoading, setTLoading] = useState<boolean>(false);
+
+  // 日別トレンド
+  const [series, setSeries] = useState<SeriesRow[]>([]);
+  const [seriesLoading, setSeriesLoading] = useState<boolean>(false);
+  const [focusPath, setFocusPath] = useState<string>(''); // 部分一致でページ絞り込み
 
   // 初回：URLパラメータを読み込む
   useEffect(() => {
@@ -175,6 +196,32 @@ export default function ViewerPage() {
     }
   }
 
+  async function fetchSeries() {
+    if (!apiKey || !propertyId) {
+      alert('API Key と Property ID を入力してください');
+      return;
+    }
+    setSeriesLoading(true);
+    try {
+      const base = window.location.origin;
+      const body: Record<string, unknown> = { propertyId, startDate, endDate };
+      if (focusPath.trim()) body.pagePathContains = focusPath.trim();
+      const res = await fetch(`${base}/api/timeseries`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+        body: JSON.stringify(body),
+      });
+      const json = (await res.json()) as TimeseriesJson;
+      if (!res.ok) throw new Error(JSON.stringify(json));
+      setSeries(Array.isArray(json.rows) ? json.rows : []);
+    } catch (e) {
+      console.error(e);
+      alert('日別トレンドの取得に失敗しました');
+    } finally {
+      setSeriesLoading(false);
+    }
+  }
+
   /* ---------- UI ---------- */
   return (
     <main style={{ padding: 16, maxWidth: 960, margin: '0 auto' }}>
@@ -257,6 +304,21 @@ export default function ViewerPage() {
           style={{ padding: '8px 12px', border: '1px solid #111', borderRadius: 6 }}
         >
           CSV
+        </button>
+
+        {/* 日別トレンド取得 */}
+        <input
+          placeholder="特定ページの部分一致（例: /contact/）"
+          value={focusPath}
+          onChange={(e) => setFocusPath(e.target.value)}
+          style={{ border: '1px solid #ccc', padding: 6, borderRadius: 6, minWidth: 240 }}
+        />
+        <button
+          onClick={fetchSeries}
+          disabled={seriesLoading}
+          style={{ padding: '8px 12px' }}
+        >
+          {seriesLoading ? 'Loading…' : '日別トレンド'}
         </button>
       </div>
 
@@ -349,6 +411,79 @@ export default function ViewerPage() {
             )}
           </tbody>
         </table>
+      </section>
+
+      {/* ===== グラフ：上位ページPV（Bar） ===== */}
+      <section style={{ marginTop: 24 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>上位ページ PV（Top10）</h2>
+        <div style={{ width: '100%', height: 320 }}>
+          <ResponsiveContainer>
+            <BarChart
+              data={rows.slice(0, 10).map(r => ({
+                name: String((r.pageTitle ?? r.pagePath ?? '')).slice(0, 20),
+                pv: typeof r.screenPageViews === 'number' ? r.screenPageViews : (r.views ?? 0),
+              }))}
+              margin={{ top: 10, right: 20, left: 0, bottom: 40 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="name" angle={-30} textAnchor="end" interval={0} height={60}/>
+              <YAxis />
+              <Tooltip />
+              <Legend />
+              <Bar dataKey="pv" name="PV" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+
+      {/* ===== グラフ：日別セッション/ページビュー（Line） ===== */}
+      <section style={{ marginTop: 24 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
+          日別トレンド（Sessions / PageViews{focusPath ? `｜filter: ${focusPath}` : ''}）
+        </h2>
+        <div style={{ width: '100%', height: 320 }}>
+          <ResponsiveContainer>
+            <LineChart data={series} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis yAxisId="left" />
+              <YAxis yAxisId="right" orientation="right" />
+              <Tooltip />
+              <Legend />
+              <Line yAxisId="left" type="monotone" dataKey="sessions" name="Sessions" dot={false}/>
+              <Line yAxisId="right" type="monotone" dataKey="pageViews" name="PageViews" strokeDasharray="5 3" dot={false}/>
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </section>
+
+      {/* ===== グラフ：直帰率×ER の散布図（サイズ=PV） ===== */}
+      <section style={{ marginTop: 24 }}>
+        <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>直帰率 × ER（サイズ=PV）</h2>
+        <div style={{ width: '100%', height: 360 }}>
+          <ResponsiveContainer>
+            <ScatterChart margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+              <CartesianGrid />
+              <XAxis type="number" dataKey="br" name="直帰率(%)" unit="%" />
+              <YAxis type="number" dataKey="er" name="ER(%)" unit="%" />
+              <ZAxis type="number" dataKey="pv" range={[60, 400]} />
+              <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+              <Legend />
+              <Scatter
+                name="Pages"
+                data={rows.slice(0, 50).map(r => {
+                  const pv = typeof r.screenPageViews === 'number' ? r.screenPageViews : (r.views ?? 0);
+                  const br = typeof r.bounceRate === 'number' ? r.bounceRate : 0;
+                  const er = typeof r.engagementRate === 'number' ? r.engagementRate : 0;
+                  return { name: String((r.pageTitle ?? r.pagePath ?? '')).slice(0, 30), pv, br, er };
+                })}
+              />
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+        <p style={{ color:'#6b7280', fontSize:12, marginTop:4 }}>
+          ※ 右上（ER高・直帰低）が理想。左下は要改善傾向。
+        </p>
       </section>
     </main>
   );
