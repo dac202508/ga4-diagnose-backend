@@ -2,7 +2,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { BetaAnalyticsDataClient } from '@google-analytics/data';
+import { BetaAnalyticsDataClient, protos } from '@google-analytics/data';
 
 /* ===== CORS ===== */
 const CORS: Record<string, string> = {
@@ -31,11 +31,10 @@ const normalizePK = (raw?: string): string =>
 
 /* デバッグ用 GET */
 export function GET(req: NextRequest) {
-  const clients = parseClients();
   return j({
     ok: true,
     apiKeyHeader: req.headers.get('x-api-key') ?? '',
-    clientKeys: Object.keys(clients),
+    clients: Object.keys(parseClients()),
   });
 }
 
@@ -45,13 +44,8 @@ type BodyIn = {
   startDate?: string; // 'YYYY-MM-DD' | '28daysAgo'
   endDate?: string;   // 'YYYY-MM-DD' | 'yesterday'
   pagePathContains?: string;
-  limit?: number;     // 取得日数（最大想定 366）
+  limit?: number;     // 最大想定 366
 };
-
-type GADimensionValue = { value?: string | null };
-type GAMetricValue   = { value?: string | null };
-type GAReportRow = { dimensionValues?: GADimensionValue[]; metricValues?: GAMetricValue[] };
-type GAReport     = { rows?: GAReportRow[] };
 
 type RowOut = {
   date: string;
@@ -101,9 +95,8 @@ export async function POST(req: NextRequest) {
     });
     const propertyName = `properties/${propertyId}`;
 
-    /* リクエスト生成（型安全に） */
-    type RunArg = Parameters<typeof ga.runReport>[0];
-    const metrics: NonNullable<RunArg>['metrics'] = [
+    /* リクエスト（正式型で記述） */
+    const metrics: protos.google.analytics.data.v1beta.IMetric[] = [
       { name: 'sessions' },
       { name: 'screenPageViews' },
       { name: 'totalUsers' },
@@ -111,9 +104,9 @@ export async function POST(req: NextRequest) {
       { name: 'engagementRate' },
       { name: 'bounceRate' },
     ];
-    const dimensions: NonNullable<RunArg>['dimensions'] = [{ name: 'date' }];
+    const dimensions: protos.google.analytics.data.v1beta.IDimension[] = [{ name: 'date' }];
 
-    const reqObj: RunArg = {
+    const reqObj: protos.google.analytics.data.v1beta.IRunReportRequest = {
       property: propertyName,
       dateRanges: [{ startDate, endDate }],
       dimensions,
@@ -132,9 +125,9 @@ export async function POST(req: NextRequest) {
         : {}),
     };
 
-    /* 実行（await してから 0番要素を安全に取得） */
+    /* 実行（await → 0番要素を安全に取得） */
     const runResp = await ga.runReport(reqObj);
-    const res = (runResp as unknown as [GAReport])[0];
+    const res = runResp[0]; // IRunReportResponse
 
     /* 整形 */
     const rows: RowOut[] = (res.rows ?? []).map((r) => {
